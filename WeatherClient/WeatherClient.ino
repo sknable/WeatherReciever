@@ -1,208 +1,272 @@
-/****************************************************************
-Hardware Connections:
- 
- Uno Pin    CC3000 Board    Function
- 
- +5V        VCC or +5V      5V
- GND        GND             GND
- 2          INT             Interrupt
- 7          EN              WiFi Enable
- 10         CS              SPI Chip Select
- 11         MOSI            SPI MOSI
- 12         MISO            SPI MISO
- 13         SCK             SPI Clock
-****************************************************************/
-
 #include <SPI.h>
 #include <SFE_CC3000.h>
 #include <SFE_CC3000_Client.h>
+#include <SoftwareSerial.h>
+
+// Attach the serial display's RX line to digital pin 2
+SoftwareSerial LCD(4, 3); // RX, TX
 
 // Pins
 #define CC3000_INT      2   // Needs to be an interrupt pin (D2/D3)
 #define CC3000_EN       7   // Can be any digital pin
 #define CC3000_CS       10  // Preferred is pin 10 on Uno
 
-// Connection info data lengths
-#define IP_ADDR_LEN     4   // Length of IP address in bytes
+// analog I/O pins
+const byte light = A5;
+const byte temp = A0;
 
-// Constants
-char ap_ssid[] = "";                  // SSID of network
-char ap_password[] = "";          // Password of network
-unsigned int ap_security = WLAN_SEC_WPA2; // Security of network
-unsigned int timeout = 30000;             // Milliseconds
-
-//Weather Const
-
-
-char server[] = "data.sparkfun.com";        // Remote host site
-const String publicKey = "";
-
-int dataPosition = 0;
-
-//18 is the max amount of data points
-String weatherData[17];
+// Wifi Setup
+char ap_ssid[] = "";
+char ap_password[] = "";
+unsigned int ap_security = WLAN_SEC_WPA2;
+unsigned int timeout = 30000;
+#define IP_ADDR_LEN     4
 
 // Global Variables
 SFE_CC3000 wifi = SFE_CC3000(CC3000_INT, CC3000_EN, CC3000_CS);
 SFE_CC3000_Client client = SFE_CC3000_Client(wifi);
 
+//Weather Const
+float tempVal;
+int lightVal;
+byte count = 2;
+const float opVoltage = 4.7;
+boolean firstItem = false;
+
+//Sparkfun data service
+char server[] = "data.sparkfun.com";
+const String publicKey = "";
+int dataPosition = 0;
+String weatherData[17];
+
+void clearScreen()
+{
+	LCD.write(0xFE);
+	LCD.write(0x01);
+}
 void configureWifi()
 {
-  // Connect using DHCP
-  Serial.print("Connecting to SSID: ");
-  Serial.println(ap_ssid);
-  while(!wifi.connect(ap_ssid, ap_security, ap_password, timeout)) {
-    Serial.println("Error: Could not connect to AP...Reconnecting....");
-    delay(100);
-  }
+	Serial.print("Connecting to SSID: ");
+	Serial.println(ap_ssid);
+	while (!wifi.connect(ap_ssid, ap_security, ap_password, timeout))
+	{
+		delay(100);
+	}
 }
-
 void initWifi()
 {
-  int i;
-  boolean connectToWifi = true;
-  ConnectionInfo connection_info;
-  
-  
-  while(connectToWifi)
-  {
-    // Initialize CC3000 (configure SPI communications)
-    if ( wifi.init() ) {
-      Serial.println("CC3000 initialization complete");
-      connectToWifi = false;
-    } else {
-      Serial.println("Something went wrong during CC3000 init!...Trying Agian");
-      delay(100);
-    }
-  }
-  
-  configureWifi();
-  
-  // Gather connection details and print IP address
-  if ( !wifi.getConnectionInfo(connection_info) ) {
-    Serial.println("Error: Could not obtain connection details");
-  } else {
-    Serial.print("IP Address: ");
-    for (i = 0; i < IP_ADDR_LEN; i++) {
-      Serial.print(connection_info.ip_address[i]);
-      if ( i < IP_ADDR_LEN - 1 ) {
-        Serial.print(".");
-      }
-    }
-    Serial.println();
-  }
-}
+	boolean connectToWifi = true;
 
-void setup() {
-  
-  int i;
-  
-  // Initialize Serial port
-  Serial.begin(9600);
-  Serial.println();
-  Serial.println("---------------------------");
-  Serial.println("CC3000 - WeatherClient is Online");
-  Serial.println("---------------------------");
-  
-  initWifi();
-}
+	while (connectToWifi)
+	{
+		// Initialize CC3000 (configure SPI communications)
+		if (wifi.init()) {
+			Serial.println("CC3000 initialization complete");
+			connectToWifi = false;
+		}
+		else
+		{
+			delay(100);
+		}
+	}
 
+	configureWifi();
+}
+void setup()
+{
+	// Initialize Serial port
+	Serial.begin(9600);
+	LCD.begin(9600);
+
+	clearScreen();
+	selectLineOne();
+	LCD.print("My Home");
+	selectLineTwo();
+	LCD.print("Weather Forcast");
+
+	initWifi();
+	pinMode(light, INPUT);
+	pinMode(temp, INPUT);
+}
 void getWeatherData()
 {
-  
-  // Make a TCP connection to remote host
-  Serial.print("Performing HTTP GET of: ");
-  Serial.println(server);
-  if ( !client.connect(server, 80) ) {
-    Serial.println("Error: Could not make a TCP connection");
-  }
-  
-  // Make a HTTP GET request
-  client.print("GET /output/");
-  client.print(publicKey);
-  client.print(".csv?page=1");
-  
-  client.println(" HTTP/1.1");
-  client.print("Host: ");
-  client.println(server);
-  client.println("Connection: close");
-  client.println();
-   
-  boolean startOfData = false;
-  boolean foundNewLine = false;
-  char lastChar = '0';
-   
-  while (client.connected())
-  {
-    if ( client.available() )
-    {
-      char c = client.read();
-      
-      if(startOfData && c == '\n')
-      {
-        if(foundNewLine)
-        {
-          break; 
-        }
-        else
-        {
-          foundNewLine = true;
-        }
-      }
-      
-      if(startOfData && c != '\n')
-      {
-        //Serial.print(c);
-        breakOutData(c);
-      }
-      
-      if(!startOfData && c == '5' && lastChar == '8')
-      {
-        startOfData = true;
-      }
-      else
-      {  
-        lastChar = c;
-      }
-          
-    }      
-  }
+	// Make a TCP connection to remote host
+	Serial.print("Performing HTTP GET of: ");
+	Serial.println(server);
+	if (!client.connect(server, 80))
+	{
+	}
+	else
+	{
+		// Make a HTTP GET request
+		client.print("GET /output/");
+		client.print(publicKey);
+		client.print(".csv?page=1");
 
+		client.println(" HTTP/1.1");
+		client.print("Host: ");
+		client.println(server);
+		client.println("Connection: close");
+		client.println();
+
+		dataPosition = 0;
+		char lastChar = '0';
+		boolean beginData = false;
+		firstItem = false;
+
+		while (client.connected())
+		{
+			if (client.available())
+			{
+				char c = client.read();
+
+				if (!beginData && lastChar == '7' && (c == 'b' || c == 'c'))
+				{
+					beginData = true;
+				}
+				else if (beginData)
+				{
+					breakOutData(c);
+				}
+				else
+				{
+					lastChar = c;
+				}
+			}
+		}
+	}
 }
-
 void breakOutData(char c)
 {
-  //Order of data
-  //baromin,batt_lvl,dailyrainin,dewptf,high_glitch,humidity,light_lvl,low_glitch,measurementTime,rainin,tempf,timestamp,winddir,winddir_avg2m,windgustdir,windgustdir_10m,windgustmph,windgustmph_10m,windspdmph_avg2m,windspeedmph
-  
-  if(c == ',')
-  {
-    Serial.print(dataPosition);
-    Serial.println(": " + weatherData[dataPosition]);
-    dataPosition++; 
-  }
-  else
-  {
-    //Serial.println(weatherData[dataPosition]);
-    weatherData[dataPosition] = weatherData[dataPosition] + c;
-  }
-}
+	if (dataPosition < 17)
+	{
+		if (!firstItem && dataPosition == 0)
+		{
+			weatherData[dataPosition] = "";
+			firstItem = true;
+		}
 
-void loop() 
+		if (c == ',')
+		{
+			dataPosition++;
+			if (dataPosition < 17)
+			{
+				weatherData[dataPosition] = "";
+			}
+		}
+		else if (dataPosition != 9 && dataPosition != 6)
+		{
+			if (c != '\n' && c != ' ' && c != '\r')
+			{
+				weatherData[dataPosition] += c;
+			}
+		}
+		else if (dataPosition == 16)
+		{
+			dataPosition++;
+		}
+	}
+}
+void selectLineOne()
 {
-  //Wait for the imp to ping us with the ! character
-  if(Serial.available())
-  {
-    byte incoming = Serial.read();
-    if(incoming == '!')
-    {
-        getWeatherData();
-        Serial.println("Weather Download Complete");
-    }
-  
-  }  
-  
-  delay(1000);
- 
- 
+	LCD.write(0xFE); //command flag
+	LCD.write(128); //position
+}
+void selectLineTwo()
+{
+	LCD.write(0xFE); //command flag
+	LCD.write(192); //position
+}
+void loop()
+{
+	if (count == 2)
+	{
+		getWeatherData();
+		count = 0;
+	}
+	else
+	{
+		count++;
+	}
+
+	if (weatherData[8] != "")
+	{
+		clearScreen();
+		selectLineOne();
+		LCD.print("Temp = ");
+		LCD.print(weatherData[8]);
+		LCD.print("F");
+
+		selectLineTwo();
+		LCD.print("Humidity = ");
+		LCD.print(weatherData[4]);
+		LCD.print("%");
+
+		delay(10000);
+	}
+
+	if (weatherData[16] != "")
+	{
+		clearScreen();
+		selectLineOne();
+		LCD.print("Wind = ");
+		LCD.print(weatherData[16]);
+		LCD.print("MPH");
+
+		selectLineTwo();
+		LCD.print("Gust = ");
+		LCD.print(weatherData[14]);
+		LCD.print("MPH");
+
+		delay(10000);
+	}
+
+	if (weatherData[15] != "")
+	{
+		clearScreen();
+		selectLineOne();
+		LCD.print("Avg Wind:");
+		LCD.print(weatherData[15]);
+		LCD.print("MPH");
+
+		selectLineTwo();
+		LCD.print("Wind Dir: ");
+
+		int weatherDir = weatherData[11].toInt();
+
+		if (weatherDir < 380) LCD.print("ESE");
+		else if (weatherDir < 393) LCD.print("ENE");
+		else if (weatherDir < 414) LCD.print("E");
+		else if (weatherDir < 456) LCD.print("SSE");
+		else if (weatherDir < 508) LCD.print("SE");
+		else if (weatherDir < 551) LCD.print("SSW");
+		else if (weatherDir < 615) LCD.print("S");
+		else if (weatherDir < 680) LCD.print("NNE");
+		else if (weatherDir < 746) LCD.print("NE");
+		else if (weatherDir < 801) LCD.print("WSW");
+		else if (weatherDir < 833) LCD.print("SW");
+		else if (weatherDir < 878) LCD.print("NNW");
+		else if (weatherDir < 913) LCD.print("N");
+		else if (weatherDir < 940) LCD.print("WNW");
+		else if (weatherDir < 967) LCD.print("NW");
+		else if (weatherDir < 990) LCD.print("W");
+	}
+
+	readSensors();
+
+	clearScreen();
+	selectLineOne();
+	LCD.print("Inside Room");
+	selectLineTwo();
+	LCD.print("Temp = ");
+	LCD.print(tempVal);
+	LCD.print(" F");
+
+	delay(10000);
+}
+void readSensors()
+{
+	tempVal = ((analogRead(temp)*opVoltage / 1024.0) - 0.5) * 100;
+	tempVal = (tempVal * 9.0 / 5.0) + 32.0; // Convert to farenheit
+	lightVal = analogRead(light);
 }
